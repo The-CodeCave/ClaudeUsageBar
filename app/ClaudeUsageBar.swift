@@ -55,8 +55,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Check Accessibility permissions
         checkAccessibilityPermissions()
 
-        // Register global hotkey using Carbon
-        registerGlobalHotKey()
+        // Only register if user has the shortcut enabled
+        if usageManager.shortcutEnabled {
+            registerGlobalHotKey()
+        }
+    }
+
+    func setShortcutEnabled(_ enabled: Bool) {
+        if enabled {
+            registerGlobalHotKey()
+        } else {
+            unregisterGlobalHotKey()
+        }
     }
 
     func checkAccessibilityPermissions() {
@@ -86,6 +96,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func registerGlobalHotKey() {
+        // Guard against double registration
+        if hotKeyRef != nil { return }
+
         var hotKeyID = EventHotKeyID()
         // Use simple numeric ID instead of FourCharCode
         hotKeyID.signature = 0x436C5542 // 'ClUB' as hex
@@ -131,6 +144,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func unregisterGlobalHotKey() {
         if let hotKey = hotKeyRef {
             UnregisterEventHotKey(hotKey)
+            hotKeyRef = nil
             NSLog("🗑️ Unregistered Cmd+U hotkey")
         }
     }
@@ -299,6 +313,7 @@ class UsageManager: ObservableObject {
     @Published var hasWeeklySonnet: Bool = false
     @Published var hasFetchedData: Bool = false
     @Published var isAccessibilityEnabled: Bool = false
+    @Published var shortcutEnabled: Bool = true
 
     private var statusItem: NSStatusItem?
     private var sessionCookie: String = ""
@@ -332,11 +347,18 @@ class UsageManager: ObservableObject {
         }
         openAtLogin = UserDefaults.standard.bool(forKey: "open_at_login")
         lastNotifiedThreshold = UserDefaults.standard.integer(forKey: "last_notified_threshold")
+        // Default shortcut to enabled if not previously set
+        if UserDefaults.standard.object(forKey: "shortcut_enabled") == nil {
+            shortcutEnabled = true
+        } else {
+            shortcutEnabled = UserDefaults.standard.bool(forKey: "shortcut_enabled")
+        }
     }
 
     func saveSettings() {
         UserDefaults.standard.set(notificationsEnabled, forKey: "notifications_enabled")
         UserDefaults.standard.set(openAtLogin, forKey: "open_at_login")
+        UserDefaults.standard.set(shortcutEnabled, forKey: "shortcut_enabled")
         UserDefaults.standard.synchronize()
     }
 
@@ -1025,23 +1047,35 @@ struct UsageView: View {
                     Divider()
 
                     VStack(alignment: .leading, spacing: 8) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Keyboard Shortcut (⌘U)")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                            Text("Toggle popup from anywhere")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
+                        Toggle(isOn: Binding(
+                            get: { usageManager.shortcutEnabled },
+                            set: { newValue in
+                                usageManager.shortcutEnabled = newValue
+                                usageManager.saveSettings()
+                                if let appDelegate = NSApplication.shared.delegate as? AppDelegate {
+                                    appDelegate.setShortcutEnabled(newValue)
+                                }
+                            }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Keyboard Shortcut (⌘U)")
+                                    .font(.caption)
+                                Text("Toggle popup from anywhere.\nDisable if it conflicts with other apps.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
+                        .toggleStyle(.switch)
 
-                        if !usageManager.isAccessibilityEnabled {
-                            Button("Enable Keyboard Shortcut") {
+                        if usageManager.shortcutEnabled && !usageManager.isAccessibilityEnabled {
+                            Button("Grant Accessibility Permission") {
                                 NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
                             }
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
 
-                            Text("Grant Accessibility permission in System Settings\nto use ⌘U shortcut")
+                            Text("Accessibility permission may be needed\nfor the shortcut to work in all apps")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
